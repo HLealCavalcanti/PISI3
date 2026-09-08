@@ -1,0 +1,599 @@
+
+# =============================================================================
+# ESTUDO DE DADOS APLICADO A UM ABRIGO DE ANIMAIS
+# Analisando a permanência de animais através de técnicas de aprendizado de máquina
+# Dataset: Austin Animal Center Shelter Intakes and Outcomes
+# =============================================================================
+
+# =============================================================================
+# 1. IMPORTAÇÕES E CONFIGURAÇÕES INICIAIS
+# =============================================================================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import warnings
+warnings.filterwarnings('ignore')
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score, classification_report, confusion_matrix, accuracy_score
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.linear_model import LogisticRegression
+from imblearn.over_sampling import SMOTE
+
+import shap
+
+# Configurações de exibição
+pd.set_option('display.max_columns', None)
+pd.set_option('display.max_rows', 100)
+sns.set_style('whitegrid')
+plt.rcParams['figure.figsize'] = (12, 6)
+
+print("="*60)
+print("PROJETO: ESTUDO DE DADOS APLICADO A UM ABRIGO DE ANIMAIS")
+print("="*60)
+
+# =============================================================================
+# 2. CARREGAMENTO DOS DADOS
+# =============================================================================
+
+# Tentar carregar localmente; se não existir, baixar do Kaggle (requer credenciais)
+import os
+
+def carregar_dados():
+    """Carrega o dataset do Austin Animal Center."""
+
+    # Tenta carregar do arquivo local
+    arquivo_local = 'aac_intakes_outcomes.csv'
+
+    if os.path.exists(arquivo_local):
+        print(f"Carregando arquivo local: {arquivo_local}")
+        df = pd.read_csv(arquivo_local)
+        return df
+
+    # Tenta carregar do Kaggle (se tiver API configurada)
+    try:
+        import kagglehub
+        print("Baixando dados do Kaggle...")
+        path = kagglehub.dataset_download("aaronschlegel/austin-animal-center-shelter-intakes-and-outcomes")
+        df = pd.read_csv(os.path.join(path, "aac_intakes_outcomes.csv"))
+        print("Dados baixados com sucesso!")
+        return df
+    except:
+        print("Não foi possível baixar do Kaggle. Certifique-se de ter o kagglehub instalado.")
+        print("Ou coloque o arquivo 'aac_intakes_outcomes.csv' no diretório atual.")
+        return None
+
+# Carregar dados
+df = carregar_dados()
+
+if df is None:
+    # Caso não consiga carregar, orientar o usuário
+    print("\n" + "="*60)
+    print("COMO OBTER O DATASET:")
+    print("="*60)
+    print("1. Acesse: https://www.kaggle.com/datasets/aaronschlegel/austin-animal-center-shelter-intakes-and-outcomes")
+    print("2. Faça o download do arquivo 'aac_intakes_outcomes.csv'")
+    print("3. Coloque-o no mesmo diretório deste script")
+    print("4. Execute novamente")
+    print("="*60)
+    exit()
+
+print(f"\nDataset carregado com sucesso!")
+print(f"Shape: {df.shape}")
+print(f"Colunas: {df.columns.tolist()}\n")
+
+# =============================================================================
+# 3. ANÁLISE EXPLORATÓRIA (EDA)
+# =============================================================================
+
+print("\n" + "="*60)
+print("ANÁLISE EXPLORATÓRIA DOS DADOS")
+print("="*60)
+
+# 3.1. Informações gerais
+print("\n--- Informações Gerais ---")
+print(df.info())
+
+print("\n--- Estatísticas Descritivas (Numéricas) ---")
+display(df.describe())
+
+print("\n--- Estatísticas Descritivas (Categóricas) ---")
+display(df.describe(include=['object', 'category']))
+
+# 3.2. Verificação de valores ausentes
+print("\n--- Valores Ausentes por Coluna ---")
+missing = df.isnull().sum()
+missing = missing[missing > 0].sort_values(ascending=False)
+print(missing)
+
+# 3.3. Análise da variável alvo: tempo de permanência
+print("\n--- Análise do Tempo de Permanência ---")
+print(f"Média: {df['time_in_shelter_days'].mean():.2f} dias")
+print(f"Mediana: {df['time_in_shelter_days'].median():.2f} dias")
+print(f"Mínimo: {df['time_in_shelter_days'].min():.2f} dias")
+print(f"Máximo: {df['time_in_shelter_days'].max():.2f} dias")
+print(f"Desvio padrão: {df['time_in_shelter_days'].std():.2f} dias")
+
+# Criar categorias de permanência
+def categorizar_stay(dias):
+    if pd.isna(dias):
+        return 'Desconhecido'
+    elif dias <= 14:
+        return 'Curta'
+    elif dias <= 45:
+        return 'Média'
+    else:
+        return 'Longa'
+
+df['stay_category'] = df['time_in_shelter_days'].apply(categorizar_stay)
+
+print("\nDistribuição das categorias:")
+print(df['stay_category'].value_counts())
+
+# 3.4. Visualizações
+print("\n--- Gerando Visualizações ---")
+
+# Criar figura com múltiplos subplots
+fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+fig.suptitle('Análise Exploratória dos Dados do Abrigo', fontsize=16, y=1.02)
+
+# 1. Distribuição do tempo de permanência
+sns.histplot(df['time_in_shelter_days'].dropna(), kde=True, ax=axes[0,0], color='skyblue')
+axes[0,0].set_title('Distribuição do Tempo de Permanência')
+axes[0,0].set_xlabel('Dias')
+axes[0,0].axvline(df['time_in_shelter_days'].mean(), color='red', linestyle='--', label='Média')
+axes[0,0].axvline(df['time_in_shelter_days'].median(), color='green', linestyle='--', label='Mediana')
+axes[0,0].legend()
+
+# 2. Distribuição de idade na entrada
+sns.histplot(df['age_upon_intake_(days)'].dropna(), kde=True, ax=axes[0,1], color='salmon')
+axes[0,1].set_title('Distribuição da Idade na Entrada')
+axes[0,1].set_xlabel('Idade (dias)')
+
+# 3. Permanência por espécie
+sns.boxplot(x='animal_type', y='time_in_shelter_days', data=df, ax=axes[0,2])
+axes[0,2].set_title('Tempo de Permanência por Espécie')
+axes[0,2].set_xlabel('Espécie')
+axes[0,2].set_ylabel('Dias')
+axes[0,2].set_yscale('log')  # escala log para melhor visualização
+
+# 4. Permanência por condição de entrada
+sns.boxplot(x='intake_condition', y='time_in_shelter_days', data=df, ax=axes[1,0])
+axes[1,0].set_title('Tempo de Permanência por Condição de Entrada')
+axes[1,0].set_xlabel('Condição')
+axes[1,0].set_ylabel('Dias')
+axes[1,0].set_yscale('log')
+axes[1,0].tick_params(axis='x', rotation=45)
+
+# 5. Permanência por tipo de entrada
+sns.boxplot(x='intake_type', y='time_in_shelter_days', data=df, ax=axes[1,1])
+axes[1,1].set_title('Tempo de Permanência por Tipo de Entrada')
+axes[1,1].set_xlabel('Tipo de Entrada')
+axes[1,1].set_ylabel('Dias')
+axes[1,1].set_yscale('log')
+axes[1,1].tick_params(axis='x', rotation=45)
+
+# 6. Matriz de correlação (variáveis numéricas)
+numeric_cols = ['age_upon_intake_(days)', 'age_upon_outcome_(days)', 'time_in_shelter_days',
+                'intake_month', 'intake_year', 'outcome_month', 'outcome_year']
+numeric_df = df[numeric_cols].dropna()
+corr = numeric_df.corr()
+sns.heatmap(corr, annot=True, cmap='coolwarm', fmt='.2f', ax=axes[1,2])
+axes[1,2].set_title('Matriz de Correlação')
+
+plt.tight_layout()
+plt.show()
+
+# 3.5. Análise de permanência por categoria
+print("\n--- Tempo Médio de Permanência por Categoria ---")
+print(df.groupby('stay_category')['time_in_shelter_days'].describe())
+
+# =============================================================================
+# 4. PRÉ-PROCESSAMENTO DOS DADOS
+# =============================================================================
+
+print("\n" + "="*60)
+print("PRÉ-PROCESSAMENTO DOS DADOS")
+print("="*60)
+
+# 4.1. Selecionar features relevantes
+features = [
+    'animal_type',
+    'age_upon_intake_(days)',
+    'sex_upon_intake',
+    'intake_condition',
+    'intake_type',
+    'intake_month',
+    'intake_year',
+    'intake_weekday',
+    'intake_hour'
+]
+
+X = df[features].copy()
+y = df['stay_category'].copy()
+
+print(f"Features selecionadas: {len(features)}")
+print(f"Shape de X: {X.shape}")
+print(f"Shape de y: {y.shape}")
+
+# 4.2. Tratamento de valores ausentes
+print("\n--- Valores ausentes antes do tratamento ---")
+print(X.isnull().sum())
+
+# Remover linhas com target ausente
+valid_mask = ~y.isna()
+X = X[valid_mask]
+y = y[valid_mask]
+
+# Preencher valores ausentes nas features
+X['age_upon_intake_(days)'] = X['age_upon_intake_(days)'].fillna(X['age_upon_intake_(days)'].median())
+X['intake_weekday'] = X['intake_weekday'].fillna('Unknown')
+X['intake_hour'] = X['intake_hour'].fillna(X['intake_hour'].median())
+
+print("\n--- Valores ausentes após tratamento ---")
+print(X.isnull().sum())
+
+# 4.3. Codificação de variáveis categóricas
+print("\n--- Codificando variáveis categóricas ---")
+
+categorical_cols = ['animal_type', 'sex_upon_intake', 'intake_condition', 'intake_type', 'intake_weekday']
+
+# Opção 1: One-Hot Encoding (para modelos como SVM, KNN)
+X_encoded = pd.get_dummies(X, columns=categorical_cols, drop_first=True)
+
+# Opção 2: Label Encoding (para Random Forest, que lida bem com categóricas)
+# Vamos manter ambas as versões
+le_dict = {}
+for col in categorical_cols:
+    le = LabelEncoder()
+    X[col + '_encoded'] = le.fit_transform(X[col].astype(str))
+    le_dict[col] = le
+
+X_label = X.drop(columns=categorical_cols)  # Remove as originais, mantém apenas as codificadas
+
+print(f"Shape após One-Hot Encoding: {X_encoded.shape}")
+print(f"Shape após Label Encoding: {X_label.shape}")
+
+# 4.4. Normalização/Padronização
+print("\n--- Padronizando variáveis numéricas ---")
+
+numeric_features = ['age_upon_intake_(days)', 'intake_month', 'intake_year', 'intake_hour']
+
+scaler = StandardScaler()
+
+# Para One-Hot Encoding
+X_encoded_scaled = X_encoded.copy()
+X_encoded_scaled[numeric_features] = scaler.fit_transform(X_encoded_scaled[numeric_features])
+
+# Para Label Encoding
+X_label_scaled = X_label.copy()
+X_label_scaled[numeric_features] = scaler.fit_transform(X_label_scaled[numeric_features])
+
+print("Padronização concluída!")
+
+# 4.5. Divisão treino/teste
+print("\n--- Dividindo em treino (80%) e teste (20%) ---")
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X_encoded_scaled, y, test_size=0.2, random_state=42, stratify=y
+)
+
+print(f"Treino: {X_train.shape[0]} amostras")
+print(f"Teste: {X_test.shape[0]} amostras")
+print(f"Distribuição no treino:\n{y_train.value_counts()}")
+print(f"Distribuição no teste:\n{y_test.value_counts()}")
+
+# =============================================================================
+# 5. CLUSTERIZAÇÃO (K-MEANS) - PP1
+# =============================================================================
+
+print("\n" + "="*60)
+print("CLUSTERIZAÇÃO - Identificando Perfis de Animais (PP1)")
+print("="*60)
+
+# Usar dados sem a variável alvo para clusterização
+cluster_data = X_encoded_scaled.copy()
+
+# 5.1. Método do Cotovelo (Elbow)
+print("\n--- Método do Cotovelo ---")
+inertias = []
+silhouettes = []
+K_range = range(2, 11)
+
+for k in K_range:
+    kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+    kmeans.fit(cluster_data)
+    inertias.append(kmeans.inertia_)
+    silhouettes.append(silhouette_score(cluster_data, kmeans.labels_))
+
+# Plotar resultados
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+axes[0].plot(K_range, inertias, marker='o')
+axes[0].set_title('Método do Cotovelo')
+axes[0].set_xlabel('Número de Clusters (k)')
+axes[0].set_ylabel('Inércia')
+axes[0].grid(True)
+
+axes[1].plot(K_range, silhouettes, marker='o', color='green')
+axes[1].set_title('Coeficiente de Silhueta')
+axes[1].set_xlabel('Número de Clusters (k)')
+axes[1].set_ylabel('Silhueta')
+axes[1].grid(True)
+
+plt.tight_layout()
+plt.show()
+
+# 5.2. Escolher o melhor k (baseado na silhueta)
+best_k = K_range[np.argmax(silhouettes)]
+print(f"Melhor número de clusters (baseado na silhueta): {best_k}")
+
+# 5.3. Aplicar K-Means com o melhor k
+kmeans = KMeans(n_clusters=best_k, random_state=42, n_init=10)
+df['cluster'] = kmeans.fit_predict(cluster_data)
+
+print(f"\nDistribuição dos clusters:")
+print(df['cluster'].value_counts().sort_index())
+
+# 5.4. Analisar perfis dos clusters
+print("\n--- Perfil médio dos clusters (variáveis selecionadas) ---")
+cluster_profile = df.groupby('cluster')[['time_in_shelter_days', 'age_upon_intake_(days)']].mean()
+print(cluster_profile)
+
+print("\n--- Distribuição de espécies por cluster ---")
+print(pd.crosstab(df['cluster'], df['animal_type']))
+
+print("\n--- Distribuição de categoria de permanência por cluster ---")
+print(pd.crosstab(df['cluster'], df['stay_category']))
+
+# =============================================================================
+# 6. CLASSIFICAÇÃO - PP2
+# =============================================================================
+
+print("\n" + "="*60)
+print("CLASSIFICAÇÃO - Predizendo Categoria de Permanência (PP2)")
+print("="*60)
+
+# 6.1. Definir modelos
+models = {
+    'Random Forest': RandomForestClassifier(n_estimators=100, random_state=42),
+    'SVM': SVC(probability=True, random_state=42),
+    'KNN': KNeighborsClassifier(),
+    'Logistic Regression': LogisticRegression(max_iter=1000, random_state=42)
+}
+
+# 6.2. Função para extrair métricas por classe
+def extrair_metricas(y_true, y_pred, classes):
+    """Extrai métricas por classe para multiclasse."""
+    report = classification_report(y_true, y_pred, output_dict=True)
+    metricas = {}
+
+    for classe in classes:
+        if classe in report:
+            metricas[f'Precision ({classe})'] = report[classe]['precision']
+            metricas[f'Recall ({classe})'] = report[classe]['recall']
+            metricas[f'F1-Score ({classe})'] = report[classe]['f1-score']
+            metricas[f'Support ({classe})'] = report[classe]['support']
+
+    metricas['Macro avg F1'] = report['macro avg']['f1-score']
+    metricas['Weighted avg F1'] = report['weighted avg']['f1-score']
+    metricas['Accuracy'] = accuracy_score(y_true, y_pred)
+
+    return metricas
+
+# 6.3. Avaliar modelos sem balanceamento
+print("\n--- Avaliando modelos SEM balanceamento ---")
+
+classes = ['Curta', 'Média', 'Longa']
+results_no_smote = []
+
+for name, model in models.items():
+    print(f"\nTreinando {name}...")
+
+    # Treinar
+    model.fit(X_train, y_train)
+
+    # Predizer treino e teste
+    y_train_pred = model.predict(X_train)
+    y_test_pred = model.predict(X_test)
+
+    # Extrair métricas
+    train_metrics = extrair_metricas(y_train, y_train_pred, classes)
+    test_metrics = extrair_metricas(y_test, y_test_pred, classes)
+
+    # Armazenar
+    results_no_smote.append({
+        'Modelo': name,
+        'Balanceamento': 'Sem SMOTE',
+        'Train Accuracy': train_metrics['Accuracy'],
+        'Test Accuracy': test_metrics['Accuracy'],
+        'Train Macro F1': train_metrics['Macro avg F1'],
+        'Test Macro F1': test_metrics['Macro avg F1'],
+        'Train Weighted F1': train_metrics['Weighted avg F1'],
+        'Test Weighted F1': test_metrics['Weighted avg F1'],
+        'Train Metrics': train_metrics,
+        'Test Metrics': test_metrics
+    })
+
+    # Exibir relatório de classificação do teste
+    print(f"\nRelatório de Classificação - Teste ({name}):")
+    print(classification_report(y_test, y_test_pred, target_names=classes))
+
+# 6.4. Aplicar SMOTE para balanceamento
+print("\n--- Aplicando SMOTE para balanceamento ---")
+
+smote = SMOTE(random_state=42)
+X_train_res, y_train_res = smote.fit_resample(X_train, y_train)
+
+print(f"Distribuição após SMOTE:")
+print(pd.Series(y_train_res).value_counts())
+
+results_smote = []
+
+for name, model in models.items():
+    print(f"\nTreinando {name} com SMOTE...")
+
+    # Treinar com dados balanceados
+    model.fit(X_train_res, y_train_res)
+
+    # Predizer treino e teste
+    y_train_pred = model.predict(X_train_res)
+    y_test_pred = model.predict(X_test)
+
+    # Extrair métricas
+    train_metrics = extrair_metricas(y_train_res, y_train_pred, classes)
+    test_metrics = extrair_metricas(y_test, y_test_pred, classes)
+
+    # Armazenar
+    results_smote.append({
+        'Modelo': name,
+        'Balanceamento': 'Com SMOTE',
+        'Train Accuracy': train_metrics['Accuracy'],
+        'Test Accuracy': test_metrics['Accuracy'],
+        'Train Macro F1': train_metrics['Macro avg F1'],
+        'Test Macro F1': test_metrics['Macro avg F1'],
+        'Train Weighted F1': train_metrics['Weighted avg F1'],
+        'Test Weighted F1': test_metrics['Weighted avg F1'],
+        'Train Metrics': train_metrics,
+        'Test Metrics': test_metrics
+    })
+
+    # Exibir relatório de classificação do teste
+    print(f"\nRelatório de Classificação - Teste ({name} com SMOTE):")
+    print(classification_report(y_test, y_test_pred, target_names=classes))
+
+# 6.5. Consolidar resultados
+print("\n" + "="*60)
+print("RESULTADOS COMPARATIVOS")
+print("="*60)
+
+# Criar DataFrame com resultados resumidos
+all_results = results_no_smote + results_smote
+results_df = pd.DataFrame(all_results)
+
+# Selecionar colunas para exibição
+display_cols = ['Modelo', 'Balanceamento', 'Train Accuracy', 'Test Accuracy',
+                'Train Macro F1', 'Test Macro F1', 'Train Weighted F1', 'Test Weighted F1']
+display_df = results_df[display_cols].sort_values(['Test Accuracy', 'Test Macro F1'], ascending=False)
+
+print("\n--- Tabela Comparativa de Métricas ---")
+display(display_df.style.highlight_max(subset=['Train Accuracy', 'Test Accuracy', 'Train Macro F1', 'Test Macro F1'], color='lightgreen'))
+
+# 6.6. Gerar tabelas detalhadas (Tabela 1 e 2 do template)
+print("\n" + "="*60)
+print("TABELAS DETALHADAS (Treino e Teste)")
+print("="*60)
+
+# Função para criar tabela no formato do template
+def criar_tabela(metrics_dict, modelo, balanceamento, conjunto):
+    """Cria tabela no formato do template."""
+    dados = {
+        'Modelo': modelo,
+        'Balanceamento': balanceamento,
+        'Conjunto': conjunto,
+        'Precisão (Curta)': metrics_dict.get('Precision (Curta)', np.nan),
+        'Precisão (Média)': metrics_dict.get('Precision (Média)', np.nan),
+        'Precisão (Longa)': metrics_dict.get('Precision (Longa)', np.nan),
+        'Recall (Curta)': metrics_dict.get('Recall (Curta)', np.nan),
+        'Recall (Média)': metrics_dict.get('Recall (Média)', np.nan),
+        'Recall (Longa)': metrics_dict.get('Recall (Longa)', np.nan),
+        'F1-Score (Curta)': metrics_dict.get('F1-Score (Curta)', np.nan),
+        'F1-Score (Média)': metrics_dict.get('F1-Score (Média)', np.nan),
+        'F1-Score (Longa)': metrics_dict.get('F1-Score (Longa)', np.nan),
+        'Suporte (Curta)': metrics_dict.get('Support (Curta)', np.nan),
+        'Suporte (Média)': metrics_dict.get('Support (Média)', np.nan),
+        'Suporte (Longa)': metrics_dict.get('Support (Longa)', np.nan),
+        'Média F1': metrics_dict.get('Macro avg F1', np.nan),
+        'Média Ponderada F1': metrics_dict.get('Weighted avg F1', np.nan),
+        'Acurácia': metrics_dict.get('Accuracy', np.nan)
+    }
+    return dados
+
+# Criar tabelas para todos os modelos
+tabelas = []
+for res in all_results:
+    # Tabela de Treino
+    tabelas.append(criar_tabela(res['Train Metrics'], res['Modelo'], res['Balanceamento'], 'Treino'))
+    # Tabela de Teste
+    tabelas.append(criar_tabela(res['Test Metrics'], res['Modelo'], res['Balanceamento'], 'Teste'))
+
+tabela_df = pd.DataFrame(tabelas)
+print("\n--- Tabela Detalhada (Treino e Teste) ---")
+display(tabela_df.style.background_gradient(subset=['Acurácia', 'Média F1', 'Média Ponderada F1'], cmap='Blues'))
+
+# =============================================================================
+# 7. SHAP - EXPLICABILIDADE DO MELHOR MODELO
+# =============================================================================
+
+print("\n" + "="*60)
+print("SHAP - Explicabilidade do Melhor Modelo")
+print("="*60)
+
+# Identificar o melhor modelo (baseado na acurácia do teste)
+best_model_name = results_df.loc[results_df['Test Accuracy'].idxmax(), 'Modelo']
+print(f"Melhor modelo: {best_model_name}")
+
+# Re-treinar o melhor modelo com SMOTE (se disponível)
+best_model = None
+for name, model in models.items():
+    if name == best_model_name:
+        best_model = model
+        break
+
+if best_model:
+    # Treinar novamente com SMOTE para o melhor modelo
+    best_model.fit(X_train_res, y_train_res)
+
+    # Criar explainer SHAP
+    print("\nGerando explicações SHAP... (pode levar alguns segundos)")
+    explainer = shap.TreeExplainer(best_model)
+    shap_values = explainer.shap_values(X_test)
+
+    # Plotar resumo SHAP
+    plt.figure(figsize=(12, 8))
+    shap.summary_plot(shap_values, X_test, feature_names=X_test.columns, show=False)
+    plt.title(f'SHAP Summary Plot - {best_model_name}')
+    plt.tight_layout()
+    plt.show()
+
+    # Plotar importância das features (SHAP)
+    plt.figure(figsize=(10, 6))
+    shap.summary_plot(shap_values, X_test, feature_names=X_test.columns, plot_type='bar', show=False)
+    plt.title(f'SHAP Feature Importance - {best_model_name}')
+    plt.tight_layout()
+    plt.show()
+else:
+    print("Modelo não encontrado para SHAP.")
+
+# =============================================================================
+# 8. CONSIDERAÇÕES FINAIS
+# =============================================================================
+
+print("\n" + "="*60)
+print("RESUMO DOS RESULTADOS")
+print("="*60)
+
+print("\n--- Melhores Modelos por Métrica ---")
+best_accuracy = results_df.loc[results_df['Test Accuracy'].idxmax()]
+best_f1 = results_df.loc[results_df['Test Macro F1'].idxmax()]
+
+print(f"Melhor Acurácia: {best_accuracy['Modelo']} ({best_accuracy['Balanceamento']}) - {best_accuracy['Test Accuracy']:.4f}")
+print(f"Melhor F1 Macro: {best_f1['Modelo']} ({best_f1['Balanceamento']}) - {best_f1['Test Macro F1']:.4f}")
+
+print("\n--- Análise de Overfitting ---")
+for _, row in results_df.iterrows():
+    overfit = row['Train Accuracy'] - row['Test Accuracy']
+    if overfit > 0.1:
+        print(f"⚠️ {row['Modelo']} ({row['Balanceamento']}): Overfitting detectado! Treino: {row['Train Accuracy']:.4f}, Teste: {row['Test Accuracy']:.4f} (dif: {overfit:.4f})")
+    else:
+        print(f"✓ {row['Modelo']} ({row['Balanceamento']}): Treino: {row['Train Accuracy']:.4f}, Teste: {row['Test Accuracy']:.4f} (dif: {overfit:.4f})")
+
+print("\n" + "="*60)
+print("PROJETO CONCLUÍDO!")
+print("="*60)
